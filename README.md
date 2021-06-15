@@ -11,6 +11,14 @@ gcloud dataproc jobs submit spark \
     --region=${REGION} \
     -- gs://${BUCKET_NAME}/input/ gs://${BUCKET_NAME}/output/
     
+ # sample spark submit
+ gcloud dataproc jobs submit spark --
+cluster=batch-ingestion 
+--class=com.bip.spark.gcp.ReadFile 
+--jars=gs://gcp_bip_ingestion_bucket/JARS/bd_bip_ingestion.jar 
+--region=us-central1 -- gs://gcp_bip_ingestion_bucket/STAGING/ gs://gcp_bip_ingestion_bucket/RAW/ 20210615 gs://gcp_bip_ingestion_bucket/param/param.properties 
+
+    
 # View the output
 gsutil cat gs://${BUCKET_NAME}/output/*
     
