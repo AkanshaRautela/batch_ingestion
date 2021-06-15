@@ -1,12 +1,12 @@
 package com.bip.spark.gcp
 
 import org.apache.spark.sql.DataFrame
-import com.google.auth.oauth2.GoogleCredentials
-import com.google.cloud.ReadChannel
-import com.google.cloud.storage.Blob
-import com.google.cloud.storage.Storage
-import com.google.cloud.storage.StorageOptions
-import org.apache.http.client.methods.RequestBuilder.options
+//import com.google.auth.oauth2.GoogleCredentials
+//import com.google.cloud.ReadChannel
+//import com.google.cloud.storage.Blob
+//import com.google.cloud.storage.Storage
+//import com.google.cloud.storage.StorageOptions
+//import org.apache.http.client.methods.RequestBuilder.options
 import org.apache.log4j.Logger
 
 import java.io.FileInputStream
@@ -32,15 +32,15 @@ object ReadFile extends Context {
     val BUCKET_NAME = " "
     val OBJECT_NAME = " "
 
-    val options = StorageOptions.newBuilder()
-      .setProjectId(PROJECT_ID)
-      .setCredentials(GoogleCredentials.fromStream(
-        new FileInputStream(paramPath))).build()
-
-    val storage = options.getService
-    val blob = storage.get(BUCKET_NAME, OBJECT_NAME)
-
-    val fileContent : String = new String(blob.getContent())
+//    val options = StorageOptions.newBuilder()
+//      .setProjectId(PROJECT_ID)
+//      .setCredentials(GoogleCredentials.fromStream(
+//        new FileInputStream(paramPath))).build()
+//
+//    val storage = options.getService
+//    val blob = storage.get(BUCKET_NAME, OBJECT_NAME)
+//
+//    val fileContent : String = new String(blob.getContent())
 
     logger.info("Read datafile from google cloud storage and crate a dataframe")
 
