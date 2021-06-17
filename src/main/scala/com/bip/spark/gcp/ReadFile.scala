@@ -1,6 +1,7 @@
 package com.bip.spark.gcp
 
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.functions.input_file_name
 //import com.google.auth.oauth2.GoogleCredentials
 //import com.google.cloud.ReadChannel
 //import com.google.cloud.storage.Blob
@@ -8,6 +9,11 @@ import org.apache.spark.sql.DataFrame
 //import com.google.cloud.storage.StorageOptions
 //import org.apache.http.client.methods.RequestBuilder.options
 import org.apache.log4j.Logger
+import org.apache.spark.SPARK_VERSION
+import org.apache.spark.rdd.RDD
+import com.google.cloud.bigquery.JobInfo.CreateDisposition.CREATE_NEVER
+import com.google.cloud.bigquery._
+//import com.google.cloud.bigquery.connector.common.{BigQueryClient, BigQueryUtil}
 
 import java.io.FileInputStream
 
@@ -42,45 +48,70 @@ object ReadFile extends Context {
 //
 //    val fileContent : String = new String(blob.getContent())
 
-    logger.info("Read datafile from google cloud storage and crate a dataframe")
+    logger.info("Reading a param file and loading it into big query ")
+
+    val paramDF = spark.sqlContext.read.option("multiline","true").option("header","true")
+      .option("delimiter", "~").option("quote","").csv(paramPath)
+
+    paramDF.show(5,false)
+
+    logger.info("Param dataframe created and now loading it into big query dataset table")
+
+    paramDF.write.mode("APPEND").format("bigquery").option("temporaryGcsBucket","batch_ingestion_bucket").option("table", "schema_param_table.param_prop_tb").save()
+
+    logger.info("Data written to big query table")
+
+    logger.info("Read datafile from google cloud storage and create a dataframe")
 
     val df = spark.sqlContext.read.option("multiline","true").option("header","true")
-      .option("delimiter", ",").option("quote","").csv(stagingPath)
+      .option("delimiter", "|").option("quote","").csv(stagingPath).withColumn("FileName",input_file_name())
 
     logger.info("spark dataframe created ")
 
-    df.show()
+    df.show(10,false)
 
-    val trailer  = getFooter(df)
+    //val trailer  = "5"
 
-    val rowCount : Long = df.count()
+    //val withoutFooterDF = removeFooter(df)
 
-    if (rowCount == trailer.toLong) {
-      logger.info("File Row count and trailer count matched")
-      val withoutFooterDF = removeFooter(df)
+//    val rowCount : Long = withoutFooterDF.count()
+//    logger.info("Row count from df " + rowCount)
+//
+//    if (rowCount == trailer.toLong) {
+//      logger.info("File Row count and trailer count matched")
+//
+//      withoutFooterDF.show()
+//      //logger.info("check for duplicate rows")
+//      moveToRaw.writeToRaw(withoutFooterDF,rawPath,runDate)
+//
+//    } else {
+//      throw new Exception("Record count does'nt match ")
+//
+//    }
 
-      withoutFooterDF.show()
-      //logger.info("check for duplicate rows")
-      moveToRaw.writeToRaw(withoutFooterDF,rawPath,runDate)
+     moveToRaw.writeToRaw(df,rawPath,runDate)
 
-    } else {
-      throw new Exception("Record count does'nt match ")
-
-    }
 
   }
 
   def getFooter(df : DataFrame) : String = {
 
-    val trailer = df.rdd.mapPartitionsWithIndex((i,iter) => iter.zipWithIndex.map {
-      case (x,j) => ((i,j),x)}).top(2)(Ordering[(Int,Int)].on(_._1)).headOption.map(_._2)
+    logger.info("Convert into RDD")
 
-    var footer = trailer.mkString
+    df.createGlobalTempView("temp_table")
+
+    //val trailer = spark.sql("select * from temp_table order by ")
+
+    val trailer = df.rdd.mapPartitionsWithIndex((i,iter) => iter.zipWithIndex.map { case (x,j) => ((i,j),x)}).top(2)(Ordering[(Int,Int)].on(_._1)).headOption.map(_._2)
+
+    val footer = trailer.mkString
     logger.info("Trailer value from df is : " + footer)
 
-    footer = footer.replaceAll("[\\[\\]]", "")
+    val finalFooter = footer.replaceAll("[\\[\\]]", "")
 
-    footer
+    logger.info("Trailer value after replacing unwanted braces" + finalFooter)
+
+    finalFooter
 
   }
 
