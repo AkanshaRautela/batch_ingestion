@@ -1,21 +1,14 @@
 package com.bip.spark.gcp
 
-import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.functions.input_file_name
-//import com.google.auth.oauth2.GoogleCredentials
-//import com.google.cloud.ReadChannel
-//import com.google.cloud.storage.Blob
-//import com.google.cloud.storage.Storage
-//import com.google.cloud.storage.StorageOptions
-//import org.apache.http.client.methods.RequestBuilder.options
-import org.apache.log4j.Logger
-import org.apache.spark.SPARK_VERSION
-import org.apache.spark.rdd.RDD
-import com.google.cloud.bigquery.JobInfo.CreateDisposition.CREATE_NEVER
-import com.google.cloud.bigquery._
-//import com.google.cloud.bigquery.connector.common.{BigQueryClient, BigQueryUtil}
 
-import java.io.FileInputStream
+import com.bip.spark.gcp.moveToRaw.storage
+import com.google.api.gax.paging.Page
+import com.google.cloud.storage.{Blob, Storage}
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.sql.{DataFrame, Row}
+import org.apache.spark.sql.functions.{input_file_name, monotonically_increasing_id}
+import org.apache.spark.sql.functions._
+import org.apache.log4j.Logger
 
 
 object ReadFile extends Context {
@@ -24,92 +17,161 @@ object ReadFile extends Context {
 
   def main(args : Array[String]) : Unit = {
 
-    val stagingPath = args{0}
-    val rawPath = args{1}
-    val runDate = args{2}
-    val paramPath= args{3}
+    val stagingPath = args {
+      0
+    }
+    val rawPath = args {
+      1
+    }
+    val runDate = args {
+      2
+    }
+    val paramPath = args {
+      3
+    }
 
     if (args.length != 4) {
       throw new IllegalArgumentException(
         "Exactly 4 arguments are required: <inputPath> <outputPath>")
     }
 
-    val PROJECT_ID= ""
+    val PROJECT_ID = ""
     val BUCKET_NAME = " "
     val OBJECT_NAME = " "
+    var trailer = "null"
 
-//    val options = StorageOptions.newBuilder()
-//      .setProjectId(PROJECT_ID)
-//      .setCredentials(GoogleCredentials.fromStream(
-//        new FileInputStream(paramPath))).build()
-//
-//    val storage = options.getService
-//    val blob = storage.get(BUCKET_NAME, OBJECT_NAME)
-//
-//    val fileContent : String = new String(blob.getContent())
+    //    val options = StorageOptions.newBuilder()
+    //      .setProjectId(PROJECT_ID)
+    //      .setCredentials(GoogleCredentials.fromStream(
+    //        new FileInputStream(paramPath))).build()
+    //
+    //    val storage = options.getService
+    //    val blob = storage.get(BUCKET_NAME, OBJECT_NAME)
+    //
+    //    val fileContent : String = new String(blob.getContent())
 
     logger.info("Reading a param file and loading it into big query ")
 
-    val paramDF = spark.sqlContext.read.option("multiline","true").option("header","true")
-      .option("delimiter", "~").option("quote","").csv(paramPath)
+    val paramDF = spark.sqlContext.read.option("multiline", "true").option("header", "true")
+      .option("delimiter", "~").option("quote", "").csv(paramPath)
 
-    paramDF.show(5,false)
+    paramDF.show(5, false)
+
+    paramDF.cache()
 
     logger.info("Param dataframe created and now loading it into big query dataset table")
 
-    paramDF.write.mode("APPEND").format("bigquery").option("temporaryGcsBucket","batch_ingestion_bucket").option("table", "schema_param_table.param_prop_tb").save()
+    //paramDF.write.mode("APPEND").format("bigquery").option("temporaryGcsBucket","batch_ingestion_bucket").option("table", "schema_param_table.param_prop_tb").save()
 
-    logger.info("Data written to big query table")
+    //logger.info("Data written to big query table")
 
     logger.info("Read datafile from google cloud storage and create a dataframe")
 
-    val df = spark.sqlContext.read.option("multiline","true").option("header","true")
-      .option("delimiter", "|").option("quote","").csv(stagingPath).withColumn("FileName",input_file_name())
+    val stagblobs: Page[Blob] = storage.list("batch_ingestion_bucket",
+      Storage.BlobListOption.prefix("STAGING/"))
+
+    val df = spark.sqlContext.read.option("multiline", "true")
+      .option("delimiter", ",").option("quote", "\"").csv(stagingPath).withColumn("FileName", input_file_name())
 
     logger.info("spark dataframe created ")
 
-    df.show(10,false)
+    df.show(10, false)
 
-    //val trailer  = "5"
+    var fileName = df.select(df("FileName")).distinct().collect().mkString
 
-    //val withoutFooterDF = removeFooter(df)
+    fileName = fileName.replaceAll("[\\[\\]]", "")
 
-//    val rowCount : Long = withoutFooterDF.count()
-//    logger.info("Row count from df " + rowCount)
-//
-//    if (rowCount == trailer.toLong) {
-//      logger.info("File Row count and trailer count matched")
-//
-//      withoutFooterDF.show()
-//      //logger.info("check for duplicate rows")
-//      moveToRaw.writeToRaw(withoutFooterDF,rawPath,runDate)
-//
-//    } else {
-//      throw new Exception("Record count does'nt match ")
-//
-//    }
+    logger.info("Filename under process is " + fileName)
 
-     moveToRaw.writeToRaw(df,rawPath,runDate)
+    val stagFileName: String = new Path(fileName).getName
 
+    logger.info("new FileName " + stagFileName)
+
+    //val headerValue = df.select(df("HeaderCheckValue")).where(df("FileName") === (stagFileName)).distinct().collect().mkString
+
+    val fileDF = paramDF.filter(col("FileName").contains(stagFileName))
+
+    fileDF.show()
+
+    val headerValue = fileDF.select(fileDF("HeaderCheckValue")).collect().mkString.replaceAll("[\\[\\]]", "")
+    val trailerValue = fileDF.select(fileDF("TrailerCheckValue")).collect().mkString.replaceAll("[\\[\\]]", "")
+
+    logger.info("headerValue  " + headerValue + "  trailerValue : " + trailerValue)
+
+    var stagingDF = spark.emptyDataFrame
+
+    if (headerValue.equalsIgnoreCase("Column_Name")) {
+      logger.info("The header coming in file is file schema")
+
+      stagingDF = spark.sqlContext.read.option("multiline", "true").option("header", "true")
+        .option("delimiter", ",").option("quote", "\"").csv(stagingPath)
+
+    } else {
+
+      stagingDF = spark.sqlContext.read.option("multiline", "true").option("delimiter", ",").option("quote", "\"").csv(stagingPath)
+
+    }
+
+
+
+    val newStagingDF = stagingDF.withColumn("index",monotonically_increasing_id() )
+    newStagingDF.show()
+
+    var finalDF = spark.emptyDataFrame
+
+    var rowCount: Long = stagingDF.count()
+    logger.info("Row count from df " + rowCount)
+
+    if (!headerValue.equalsIgnoreCase("Column_Name")
+      && (!headerValue.equalsIgnoreCase("NA")) &&
+      (!trailerValue.equalsIgnoreCase("NA"))) {
+      rowCount = rowCount - 2
+      logger.info("final row count is " + rowCount)
+
+      val trailer = getFooter(stagingDF)
+      logger.info("Trailer value :" + trailer)
+      footerValidation(trailer, rowCount)
+      finalDF = removeHeader(newStagingDF)
+      finalDF = removeFooter(finalDF)
+
+    }
+    else if (headerValue.equalsIgnoreCase("Column_Name")
+      && !(trailerValue.equalsIgnoreCase("NA"))) {
+      rowCount = rowCount - 1
+      logger.info("final row count is " + rowCount)
+      val trailer = getFooter(stagingDF)
+      logger.info("Trailer value :" + trailer)
+      finalDF = removeFooter(newStagingDF)
+    }
+    else if (headerValue.equalsIgnoreCase("NA")
+    && !(trailerValue.equalsIgnoreCase("NA"))) {
+      rowCount = rowCount - 1
+      logger.info("final row count is " + rowCount)
+      val trailer = getFooter(stagingDF)
+      logger.info("Trailer value :" + trailer)
+      footerValidation(trailer,rowCount)
+      finalDF = removeFooter(newStagingDF)
+    }
+
+    else (headerValue.equalsIgnoreCase("NA") && trailerValue.equalsIgnoreCase("NA"))
+      rowCount
+
+
+    val rawDF = finalDF.drop("index")
+    rawDF.show()
+    moveToRaw.writeToRaw(rawDF, rawPath, runDate,stagFileName)
 
   }
 
   def getFooter(df : DataFrame) : String = {
 
-    logger.info("Convert into RDD")
+    val footer : Array[Row] = df.tail(1)
 
-    df.createGlobalTempView("temp_table")
+    var finalFooter = footer.mkString
 
-    //val trailer = spark.sql("select * from temp_table order by ")
+    finalFooter = finalFooter.replaceAll("[\\[\\]]", "")
 
-    val trailer = df.rdd.mapPartitionsWithIndex((i,iter) => iter.zipWithIndex.map { case (x,j) => ((i,j),x)}).top(2)(Ordering[(Int,Int)].on(_._1)).headOption.map(_._2)
-
-    val footer = trailer.mkString
-    logger.info("Trailer value from df is : " + footer)
-
-    val finalFooter = footer.replaceAll("[\\[\\]]", "")
-
-    logger.info("Trailer value after replacing unwanted braces" + finalFooter)
+    logger.info("Last row of the dataframe is " + finalFooter)
 
     finalFooter
 
@@ -117,23 +179,48 @@ object ReadFile extends Context {
 
   def removeFooter(df:DataFrame) : DataFrame = {
 
-    val rdd = df.rdd
-    val schema = df.schema
+    val last : Long = df.agg(max("index")).collect()(0)(0).asInstanceOf[Long]
 
-    val lastPartition = rdd.getNumPartitions -1
-    val withoutTrailer = rdd.mapPartitionsWithIndex { (idx, iter) => {
-      var reti = iter
-      if (idx == lastPartition) {
-        val lastPart = iter.toArray
-        reti = lastPart.slice(0, lastPart.length - 1).toIterator
-      }
-      reti
-    }
-    }
+    logger.info("Max number " + last)
 
-    val newDF = spark.createDataFrame(withoutTrailer,schema)
+    val filtered  = df.filter(col("index") =!= (last))
 
-    newDF
+    filtered.show()
+
+    filtered
+  }
+
+  def removeHeader(df : DataFrame) : DataFrame = {
+
+    val head = df.head()
+    logger.info("Header " + head )
+    val withoutHeader = df.filter(col("index") =!= 0)
+    withoutHeader.show()
+
+    withoutHeader
+
+  }
+
+  def footerValidation(footer : String , recordCount : Long) : String = {
+
+    var arr : Array[String] = null
+    arr = footer.split("\\,")
+
+    logger.info("record count " + recordCount)
+
+    val x = arr.contains(recordCount.toString)
+
+    logger.info("Array value " + arr.mkString(","))
+
+    logger.info("Boolean value : " + x.toString)
+
+    if (x) {
+      logger.info("return footer value " + footer)
+      footer
+    } else
+      throw new Exception("record count does not match with trailer value")
+
+
   }
 
 }

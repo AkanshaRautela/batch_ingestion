@@ -19,34 +19,23 @@ object moveToRaw extends Context {
 
   val logger = Logger.getLogger(this.getClass.getSimpleName)
 
-  def writeToRaw(df:DataFrame,rawPath : String, opcadate : String) = {
+  def writeToRaw(df:DataFrame,rawPath : String, opcadate : String, fileName : String) = {
 
     logger.info("Writing the df into raw google cloud storage " + rawPath)
 
     val sdf = new SimpleDateFormat("yyyyMMdd")
 
-    val storage = StorageOptions.newBuilder().setProjectId("dcs-parent-project").build().getService()
-
-
     var year = opcadate.substring(0,4).toInt
     var month = opcadate.substring(4,6).toInt
     var day = opcadate.substring(6,8).toInt
 
-    var fileName = df.select(df("FileName")).distinct().collect().mkString
-
-    fileName = fileName.replaceAll("[\\[\\]]", "")
-
-    logger.info("Filename under process is " + fileName)
-
     val conf = spark.sparkContext.hadoopConfiguration
 
-    val fs = FileSystem.get(conf)
+    val rawLocation = "GOOD" + "/year=" + year + "/" + "month=" + month + "/" + "day=" + day + "/"
 
-    val newFileName : String = new Path(fileName).getName
+    logger.info("Raw location required is " + rawLocation)
 
-    logger.info("new FileName " + newFileName)
-
-    val newRawLocation = rawPath + "GOOD" + "/year=" + year + "/" + "month=" + month + "/" + "day=" + day + "/"
+    val newRawLocation = rawPath + rawLocation
 
     logger.info("New Raw location required is " + newRawLocation)
 
@@ -59,42 +48,38 @@ object moveToRaw extends Context {
 
     logger.info("file written in gs location " + newRawLocation)
 
-    val srcPath = new Path(newRawLocation + "/part*")
-    val destPath = new Path(newRawLocation + newFileName)
+    val blobs : Page[Blob] = storage.list("batch_ingestion_bucket",
+                             Storage.BlobListOption.prefix("RAW/"+ rawLocation))
+
+    var partNameFinal = "null"
+    import scala.collection.JavaConversions._
+    for (fileList <- blobs.iterateAll) {
+
+      logger.info("Actual file list " + fileList)
+      val partName = fileList.getName
+      logger.info("filename in blob " + partName)
+
+      if (partName.contains("part")) {
+        partNameFinal = "gs://batch_ingestion_bucket/" + partName
+        logger.info("Part name file from loop :  " + partNameFinal)
+      }
+    }
+
+    val srcPath = new Path(partNameFinal)
+    val destPath = new Path(newRawLocation + fileName)
 
     logger.info("source path " + srcPath)
     logger.info("dest path " + destPath)
 
-    //val partName = srcPath.getName
+    val partFileName = srcPath.getName
 
-//    val bucket = storage.get("batch_ingestion_bucket")
-//    val blobListOptions = Storage.BlobListOption.prefix("part")
-//
-//    logger.info("Part filename is " + partName)
-//
-     val blobs = storage.list("batch_ingestion_bucket")
+    logger.info("Part file name is :" +  partFileName)
 
-    var partName = "null"
-    import scala.collection.JavaConversions._
-    for (fileList <- blobs.iterateAll) {
-
-      partName = fileList.getName
-      logger.info("filename in blob " + partName)
-    }
-
-//    val blob = storage.get("batch_ingestion_bucket", newRawLocation + partName)
-//    val copyWriter = blob.copyTo("batch_ingestion_bucket", newRawLocation + newFileName)
-//
-//    copyWriter.getResult()
-//
-//    blob.delete()
-
-    //fs.rename(new Path(newRawLocation + partName),destPath)
-    //srcPath.getFileSystem(conf).rename(new Path(newRawLocation + partName), destPath)
+    srcPath.getFileSystem(conf).rename(new Path(newRawLocation + partFileName), destPath)
 
     logger.info("Part file is renamed to original file name successfully")
 
-    //MoveToSchema.writeToSchema(newFileName,opcadate)
+    MoveToSchema.writeToSchema(df,fileName,opcadate)
 
  }
 

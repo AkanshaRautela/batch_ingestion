@@ -7,19 +7,19 @@ object MoveToSchema extends Context {
 
   val logger = Logger.getLogger(this.getClass.getSimpleName)
 
-  def writeToSchema(fileName : String , date : String ) = {
+  def writeToSchema(rawDF : DataFrame, fileName : String , date : String ) = {
 
-    logger.info("write df to schema ")
+    logger.info("write df to bq schema table")
 
 //    val viewDF = spark.read.format("bigquery")
 //      .option("table" , "").load().cache()
 
-//    val schemaDF = viewDF.withColumn("deleteFlag","true")
-//      .withColumn("Brand_Id","LBG")
+    val schemaDF = rawDF.withColumn("deleteFlag","true")
+     .withColumn("Brand_Id","LBG")
 //
 //    schemaDF.show()
 //
-//    schemaDF.write.mode("APPEND").format("bigquery").option("temporaryGcsBucket","batch_ingestion_bucket").option("table", "schema_param_table.param_prop_tb").save()
+    schemaDF.write.mode("APPEND").format("bigquery").option("temporaryGcsBucket","batch_ingestion_bucket").option("table", "schema_param_table.param_prop_tb").save()
 
 
 
